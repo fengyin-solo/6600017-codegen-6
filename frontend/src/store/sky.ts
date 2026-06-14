@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { STARS, CONSTELLATIONS } from '../data/stars'
 import type { Star } from '../types'
@@ -14,6 +14,93 @@ export const useSkyStore = defineStore('sky', () => {
   const selectedStar = ref<Star | null>(null)
   const searchQuery = ref('')
   const latitude = ref(39.9) // Beijing default
+
+  // Playback state
+  const playbackEnabled = ref(false)
+  const playbackPlaying = ref(false)
+  const playbackProgress = ref(0) // 0 - 1
+  const playbackSpeed = ref(600) // seconds of real sky per real second (default: 10 min = 600x)
+  const playbackStartDate = ref(new Date())
+  const playbackEndDate = ref(new Date())
+  let playbackAnimId = 0
+  let playbackLastFrame = 0
+
+  function computeNightRange(baseDate: Date) {
+    const d = new Date(baseDate)
+    d.setHours(18, 0, 0, 0) // 6 PM same day
+    const start = new Date(d)
+    d.setHours(d.getHours() + 12) // 6 AM next day
+    const end = new Date(d)
+    return { start, end }
+  }
+
+  function initPlayback(date?: Date) {
+    const base = date || viewDate.value
+    const { start, end } = computeNightRange(base)
+    playbackStartDate.value = start
+    playbackEndDate.value = end
+    playbackProgress.value = 0
+    viewDate.value = new Date(start)
+  }
+
+  function startPlayback() {
+    if (!playbackEnabled.value) return
+    if (playbackPlaying.value) return
+    playbackPlaying.value = true
+    playbackLastFrame = performance.now()
+    tickPlayback()
+  }
+
+  function pausePlayback() {
+    playbackPlaying.value = false
+    if (playbackAnimId) {
+      cancelAnimationFrame(playbackAnimId)
+      playbackAnimId = 0
+    }
+  }
+
+  function togglePlayback() {
+    if (playbackPlaying.value) pausePlayback()
+    else startPlayback()
+  }
+
+  function setPlaybackProgress(p: number) {
+    playbackProgress.value = Math.max(0, Math.min(1, p))
+    const totalMs = playbackEndDate.value.getTime() - playbackStartDate.value.getTime()
+    const targetMs = playbackStartDate.value.getTime() + totalMs * playbackProgress.value
+    viewDate.value = new Date(targetMs)
+  }
+
+  function tickPlayback() {
+    if (!playbackPlaying.value) return
+    const now = performance.now()
+    const delta = (now - playbackLastFrame) / 1000
+    playbackLastFrame = now
+
+    const totalMs = playbackEndDate.value.getTime() - playbackStartDate.value.getTime()
+    const advanceMs = delta * playbackSpeed.value * 1000
+    const currentMs = viewDate.value.getTime() + advanceMs
+
+    if (currentMs >= playbackEndDate.value.getTime()) {
+      viewDate.value = new Date(playbackEndDate.value)
+      playbackProgress.value = 1
+      pausePlayback()
+      return
+    }
+
+    viewDate.value = new Date(currentMs)
+    playbackProgress.value = (currentMs - playbackStartDate.value.getTime()) / totalMs
+    playbackAnimId = requestAnimationFrame(tickPlayback)
+  }
+
+  watch(playbackEnabled, (enabled) => {
+    if (enabled) {
+      initPlayback()
+    } else {
+      pausePlayback()
+      viewDate.value = new Date()
+    }
+  })
 
   const localSiderealTime = computed(() => {
     const d = viewDate.value
@@ -72,6 +159,9 @@ export const useSkyStore = defineStore('sky', () => {
   return {
     viewDate, zoom, panX, panY, showLabels, showConstLines, showGrid,
     selectedStar, searchQuery, latitude, localSiderealTime, filteredStars,
+    playbackEnabled, playbackPlaying, playbackProgress, playbackSpeed,
+    playbackStartDate, playbackEndDate,
+    initPlayback, startPlayback, pausePlayback, togglePlayback, setPlaybackProgress,
     projectStar, starRadius, spectralColor, selectStar,
     STARS, CONSTELLATIONS
   }
